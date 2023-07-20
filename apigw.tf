@@ -1,36 +1,44 @@
-data "aws_iam_policy_document" "lambda_assume_role_policy" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
+resource "aws_api_gateway_rest_api" "example_api" {
+  name = "${var.your_name}-lambda-api"
+}
+resource "aws_api_gateway_resource" "example_resource" {
+  rest_api_id = aws_api_gateway_rest_api.example_api.id
+  parent_id   = aws_api_gateway_rest_api.example_api.root_resource_id
+  path_part  = "hello"
+}
+resource "aws_api_gateway_method" "example_method" {
+  rest_api_id   = aws_api_gateway_rest_api.example_api.id
+  resource_id   = aws_api_gateway_resource.example_resource.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+resource "aws_api_gateway_integration" "integration" {
+  rest_api_id             = aws_api_gateway_rest_api.example_api.id
+  resource_id             = aws_api_gateway_resource.example_resource.id
+  http_method             = aws_api_gateway_method.example_method.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.hello_lambda.invoke_arn
+}
+resource "aws_lambda_permission" "apigw_lambda" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.hello_lambda.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.example_api.execution_arn}/*/*"
+}
+resource "aws_api_gateway_deployment" "example" {
+  rest_api_id = aws_api_gateway_rest_api.example_api.id
+  triggers = {
+    redeployment = sha1(jsonencode(aws_api_gateway_rest_api.example_api.body))
   }
+  lifecycle {
+    create_before_destroy = true
+  }
+  depends_on = [aws_api_gateway_method.example_method, aws_api_gateway_integration.integration]
 }
-
-resource "aws_iam_role_policy_attachment" "terraform_lambda_policy" {
-  role       = "${aws_iam_role.lambda_role.name}"
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-resource "aws_iam_role" "lambda_role" {
-  name               = "${var.your_name}-lambda-hw-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role_policy.json
-}
-
-data "archive_file" "python_lambda_package" {
-  type        = "zip"
-  source_file = "${path.module}/lambda_function.py"
-  output_path = "lambda.zip"
-}
-
-resource "aws_lambda_function" "hello_lambda" {
-  function_name    = "${var.your_name}-lambda-apigw"
-  filename         = "lambda.zip"
-  source_code_hash = data.archive_file.python_lambda_package.output_base64sha256
-  role             = aws_iam_role.lambda_role.arn
-  runtime          = "python3.9"
-  handler          = "lambda_function.lambda_handler"
-  timeout          = 10
+resource "aws_api_gateway_stage" "example" {
+  deployment_id = aws_api_gateway_deployment.example.id
+  rest_api_id   = aws_api_gateway_rest_api.example_api.id
+  stage_name    = "dev"
 }
